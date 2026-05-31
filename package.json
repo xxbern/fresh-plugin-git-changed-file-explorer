@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/sinelaw/fresh/main/crates/fresh-editor/plugins/schemas/package.schema.json",
+  "name": "git-changed-files-explorer",
+  "version": "0.1.0",
+  "description": "Show Git changed files in Fresh file-explorer and open selected changes side by side.",
+  "type": "plugin",
+  "author": "Local developer",
+  "license": "MIT",
+  "fresh": {
+    "entry": "plugin.ts"
+  }
+}
