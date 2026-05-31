@@ -28,18 +28,12 @@ for guaranteed side-by-side opening.
 ## Commands
 
 - `Git Changed Files: Show`
-  Opens the changed-files panel. Click a file row or press `Return` on it to open it beside the panel.
+  Opens the changed-files panel. By default, the plugin binds this command to
+  `F8` when that key is available.
 - `Git Changed Files: Open Side By Side`
   Opens a picker for changed files and opens the selected file in a side split.
 - `Git Changed Files: Refresh`
   Refreshes Git status badges and the changed-files panel.
-
-## Panel Keys
-
-- Click file row: open selected file in a dedicated side split.
-- `Return`: open selected file in a dedicated side split.
-- `r`: refresh.
-- `q`: close panel.
 
 ## Behavior
 
@@ -50,12 +44,42 @@ for guaranteed side-by-side opening.
 - If a selected file is already open, the plugin focuses the existing side-by-side
   editor instead of duplicating tabs when Fresh can provide that behavior.
 
+## Installation
+
+### Install from GitHub
+
+On another machine, install the plugin directly from this repository:
+
+1. Open the Fresh command palette with `Ctrl+P`, then type `>`.
+2. Run `pkg: Install from URL`.
+3. Paste:
+   `https://github.com/xxbern/fresh-plugin-git-changed-file-explorer`
+4. Restart Fresh.
+
+### Manual install
+
+Copy this repository into Fresh's plugin packages directory:
+
+```sh
+mkdir -p ~/.config/fresh/plugins/packages
+git clone https://github.com/xxbern/fresh-plugin-git-changed-file-explorer \
+  ~/.config/fresh/plugins/packages/git-changed-files-explorer
+```
+
+Then restart Fresh.
+
 ## Development
 
 Run the validation script before packaging or installing locally:
 
 ```sh
 ./validate.sh
+```
+
+For local development, copy `plugin.ts` into the installed package directory:
+
+```sh
+cp plugin.ts ~/.config/fresh/plugins/packages/git-changed-files-explorer/plugin.ts
 ```
 
 The plugin entry point is `plugin.ts`, as declared in `package.json`.

@@ -1181,17 +1181,7 @@ registerHandler("git_changed_files_post_command", handlePostCommand);
 registerHandler("git_changed_files_idle", handleIdle);
 registerHandler("git_changed_files_layout_changed", handleLayoutChanged);
 
-editor.defineMode(
-  PANEL_MODE,
-  [
-    ["Return", "git_changed_files_open_selected"],
-    ["r", "git_changed_files_refresh"],
-    ["q", "git_changed_files_close_panel"],
-  ],
-  true,
-  false,
-  true,
-);
+editor.defineMode(PANEL_MODE, [], true, false, true);
 
 editor.defineMode(
   "git-changed-files-diff",
