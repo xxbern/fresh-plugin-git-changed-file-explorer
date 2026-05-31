@@ -10,6 +10,7 @@ const DIFF_BUFFER_NAME = "*Git Changed Diff*";
 const TARGET_SPLIT_ID = "git-changed-files-target";
 const TOGGLE_FILE_EXPLORER_ACTION = "ToggleFileExplorer";
 const DEFAULT_SHOW_KEYS = ["F8", "F9", "F10", "F12"];
+const FILE_EXPLORER_VISIBLE_WIDTH_DELTA = 20;
 
 type ChangeKind =
   | "added"
@@ -42,7 +43,7 @@ interface PluginState {
   oldDiffBufferId: number | null;
   newDiffBufferId: number | null;
   sourceSplitId: number | null;
-  suppressNextFileExplorerToggle: boolean;
+  suppressedFileExplorerToggleCount: number;
   suppressPanelClosedSideEffects: boolean;
   suppressLayoutCloseUntil: number;
   fileExplorerVisible: boolean | null;
@@ -60,7 +61,7 @@ const state: PluginState = {
   oldDiffBufferId: null,
   newDiffBufferId: null,
   sourceSplitId: null,
-  suppressNextFileExplorerToggle: false,
+  suppressedFileExplorerToggleCount: 0,
   suppressPanelClosedSideEffects: false,
   suppressLayoutCloseUntil: 0,
   fileExplorerVisible: null,
@@ -277,7 +278,7 @@ function renderEntries(changes: GitChange[]): TextPropertyEntry[] {
   if (state.repoRoot === null) {
     return [
       {
-        text: "Git Changed Files\nNo Git repository found for this Fresh workspace.\n",
+        text: "No Git repository found for this Fresh workspace.",
       },
     ];
   }
@@ -285,14 +286,14 @@ function renderEntries(changes: GitChange[]): TextPropertyEntry[] {
   if (changes.length === 0) {
     return [
       {
-        text: "Git Changed Files\nNo changed files.\n",
+        text: "No changed files.",
       },
     ];
   }
 
   const entries: TextPropertyEntry[] = [
     {
-      text: `Git Changed Files (${changes.length})\n`,
+      text: `Git Changed Files (${changes.length})\n\n`,
       style: { bold: true },
     },
   ];
@@ -413,39 +414,6 @@ function handlePanelNoLongerVisible(): void {
   }
 }
 
-function fileExplorerWidthFraction(): number {
-  const config = editor.getConfig() as {
-    file_explorer?: {
-      width?: unknown;
-    };
-  };
-  const width = config.file_explorer?.width ?? "30%";
-
-  if (typeof width === "string") {
-    const trimmed = width.trim();
-    if (trimmed.endsWith("%")) {
-      const percent = parseFloat(trimmed.slice(0, -1));
-      if (Number.isFinite(percent)) {
-        return Math.min(0.9, Math.max(0.05, percent / 100));
-      }
-    }
-
-    const columns = parseFloat(trimmed);
-    if (Number.isFinite(columns) && columns > 0) {
-      return Math.min(0.9, Math.max(0.05, columns / editor.getScreenSize().width));
-    }
-  }
-
-  if (typeof width === "number" && Number.isFinite(width)) {
-    if (width > 0 && width <= 1) {
-      return Math.min(0.9, Math.max(0.05, width));
-    }
-    return Math.min(0.9, Math.max(0.05, width / 100));
-  }
-
-  return 0.3;
-}
-
 function fileExplorerSplitRatio(): number {
   return 0.2;
 }
@@ -493,39 +461,6 @@ function closeChangedFilesBuffers(suppressClosedSideEffects = false): void {
 
   state.panelBufferId = null;
   state.panelSplitId = null;
-}
-
-function debugSplitState(context: string, targetSplitId: number | null = null): void {
-  const summary = splitStateSummary(context, targetSplitId);
-  editor.debug(summary);
-  editor.setStatus(summary);
-}
-
-function splitStateSummary(context: string, targetSplitId: number | null = null): string {
-  const splits = editor
-    .listSplits()
-    .map((split) => `${split.splitId}:${split.bufferId}:${split.viewport.width}x${split.viewport.height}`)
-    .join(",");
-  const panelInfo =
-    state.panelBufferId === null ? null : editor.getBufferInfo(state.panelBufferId)?.splits ?? null;
-  return `Git Changed Files: ${context} active=${editor.getActiveSplitId()} source=${state.sourceSplitId} target=${state.targetSplitId} panelSplit=${state.panelSplitId} panelBuffer=${state.panelBufferId} panelInfo=${JSON.stringify(panelInfo)} targetArg=${targetSplitId} splits=[${splits}]`;
-}
-
-function debugListBuffers(): void {
-  for (const buffer of editor.listBuffers()) {
-    const raw = buffer as BufferInfo & Record<string, unknown>;
-    const title =
-      typeof raw.name === "string"
-        ? raw.name
-        : typeof raw.title === "string"
-          ? raw.title
-          : typeof raw.display_name === "string"
-            ? raw.display_name
-            : "";
-    editor.debug(
-      `Git Changed Files: buffer id=${buffer.id} title=${JSON.stringify(title)} path=${JSON.stringify(buffer.path)} virtual=${buffer.is_virtual} splits=${JSON.stringify(buffer.splits)} keys=${JSON.stringify(Object.keys(raw))}`,
-    );
-  }
 }
 
 function installDefaultShowKeybinding(): void {
@@ -592,6 +527,20 @@ function widestNonPanelSplit(): number | null {
   return widest.splitId;
 }
 
+function preferredNonPanelSplit(): number | null {
+  const activeSplitId = editor.getActiveSplitId();
+  if (splitExists(activeSplitId) && !isKnownPanelSplit(activeSplitId)) {
+    return activeSplitId;
+  }
+
+  const fileSplitId = visibleFileBufferSplit();
+  if (fileSplitId !== null) {
+    return fileSplitId;
+  }
+
+  return widestNonPanelSplit();
+}
+
 function visibleFileBufferSplit(): number | null {
   const candidateSplitIds = new Set<number>();
   for (const buffer of editor.listBuffers()) {
@@ -616,37 +565,53 @@ function visibleFileBufferSplit(): number | null {
   return bestSplitId;
 }
 
+function widestNonPanelSplitWidth(): number {
+  let widest = 0;
+  for (const split of editor.listSplits()) {
+    if (!isKnownPanelSplit(split.splitId) && split.viewport.width > widest) {
+      widest = split.viewport.width;
+    }
+  }
+  return widest;
+}
+
+function nonPanelSplitCount(): number {
+  return editor
+    .listSplits()
+    .filter((split) => !isKnownPanelSplit(split.splitId))
+    .length;
+}
+
 function hasLikelyFileExplorerSplit(): boolean {
-  const splits = editor.listSplits();
-  if (splits.length <= 1) {
+  if (nonPanelSplitCount() !== 1) {
     return false;
   }
 
-  const screenWidth = editor.getScreenSize().width;
-  return splits.some(
-    (split) =>
-      !isKnownPanelSplit(split.splitId) &&
-      split.viewport.width <= screenWidth * 0.5,
-  );
+  const widestWidth = widestNonPanelSplitWidth();
+  if (widestWidth === 0) {
+    return false;
+  }
+
+  return editor.getScreenSize().width - widestWidth >= FILE_EXPLORER_VISIBLE_WIDTH_DELTA;
 }
 
 function rememberTargetSplit(): void {
   refreshPanelSplitId();
-  const activeSplitId = editor.getActiveSplitId();
-  if (isKnownPanelSplit(activeSplitId)) {
+  const preferredSplitId = preferredNonPanelSplit();
+  if (preferredSplitId === null) {
     return;
   }
 
   const activeSplit = editor
     .listSplits()
-    .find((split) => split.splitId === activeSplitId);
+    .find((split) => split.splitId === preferredSplitId);
   const widestSplitId = widestNonPanelSplit();
   const targetSplitId =
     activeSplit !== undefined &&
     widestSplitId !== null &&
     activeSplit.viewport.width < editor.getScreenSize().width / 2
       ? widestSplitId
-      : activeSplitId;
+      : preferredSplitId;
 
   state.targetSplitId = targetSplitId;
   state.sourceSplitId = targetSplitId;
@@ -655,17 +620,18 @@ function rememberTargetSplit(): void {
 
 async function hideFileExplorerForPanel(): Promise<void> {
   rememberTargetSplit();
-  if (state.fileExplorerVisible === true || hasLikelyFileExplorerSplit()) {
-    debugSplitState("toggle-file-explorer-for-changed-panel");
-    state.suppressNextFileExplorerToggle = true;
-    if (!editor.executeAction("toggle_file_explorer")) {
-      state.suppressNextFileExplorerToggle = false;
-    } else {
-      state.fileExplorerVisible = false;
-    }
-  } else {
-    debugSplitState("skip-file-explorer-toggle-for-changed-panel");
+
+  if (!hasLikelyFileExplorerSplit()) {
+    state.fileExplorerVisible = false;
+    return;
   }
+
+  state.suppressedFileExplorerToggleCount += 1;
+  if (!editor.executeAction("toggle_file_explorer")) {
+    state.suppressedFileExplorerToggleCount -= 1;
+    return;
+  }
+  state.fileExplorerVisible = false;
 }
 
 async function refreshGitChangedFiles(): Promise<void> {
@@ -693,8 +659,14 @@ async function showGitChangedFilesPanel(): Promise<void> {
   closeChangedFilesBuffers(true);
   reconcilePanelState();
 
-  state.sourceSplitId = editor.getActiveSplitId();
+  state.sourceSplitId = preferredNonPanelSplit();
   await hideFileExplorerForPanel();
+  if (
+    (state.sourceSplitId === null || !splitExists(state.sourceSplitId)) &&
+    preferredNonPanelSplit() !== null
+  ) {
+    state.sourceSplitId = preferredNonPanelSplit();
+  }
   if (state.sourceSplitId !== null && splitExists(state.sourceSplitId)) {
     editor.focusSplit(state.sourceSplitId);
   }
@@ -919,7 +891,6 @@ async function openChangeSideBySide(change: GitChange): Promise<void> {
     return;
   }
   if (isKnownPanelSplit(target.splitId)) {
-    debugSplitState("target-was-panel", target.splitId);
     closePlaceholderBuffer(target.placeholderBufferId);
     const fallbackSplitId = widestNonPanelSplit();
     if (fallbackSplitId === null) {
@@ -935,7 +906,6 @@ async function openChangeSideBySide(change: GitChange): Promise<void> {
 
   if (!editor.focusSplit(target.splitId)) {
     closePlaceholderBuffer(target.placeholderBufferId);
-    debugSplitState("failed-focus-target", target.splitId);
     return;
   }
 
@@ -999,9 +969,6 @@ async function openChangeSideBySide(change: GitChange): Promise<void> {
     }
   }
   closePlaceholderBuffer(target.placeholderBufferId);
-  editor.debug(
-    `Git Changed Files: open diff target=${target.splitId} composite=${compositeBufferId} setSplitBuffer=${setResult} showBuffer=${showResult}`,
-  );
   editor.setStatus(
     setResult || showResult
       ? `Opened side-by-side diff: ${change.relativePath}`
@@ -1087,8 +1054,11 @@ function openFileExplorerIfClosed(): void {
     return;
   }
 
+  state.suppressedFileExplorerToggleCount += 1;
   if (editor.executeAction("toggle_file_explorer")) {
     state.fileExplorerVisible = true;
+  } else {
+    state.suppressedFileExplorerToggleCount -= 1;
   }
 }
 
@@ -1131,7 +1101,7 @@ function handlePreCommand(args: { action: string | Record<string, unknown> }): v
     return;
   }
 
-  if (state.suppressNextFileExplorerToggle) {
+  if (state.suppressedFileExplorerToggleCount > 0) {
     return;
   }
 
@@ -1141,21 +1111,18 @@ function handlePreCommand(args: { action: string | Record<string, unknown> }): v
 }
 
 function handlePostCommand(args: { action: string | Record<string, unknown> }): void {
-  if (state.panelBufferId !== null || state.compositeBufferId !== null) {
-    editor.setStatus(`Git Changed Files: post-command action=${JSON.stringify(args.action)}`);
-  }
-
   if (!isToggleFileExplorerAction(args.action)) {
     handlePanelNoLongerVisible();
     return;
   }
 
-  if (state.suppressNextFileExplorerToggle) {
-    state.suppressNextFileExplorerToggle = false;
-    state.fileExplorerVisible = false;
-  } else {
-    state.fileExplorerVisible = state.fileExplorerVisible === true ? false : true;
+  if (state.suppressedFileExplorerToggleCount > 0) {
+    state.suppressedFileExplorerToggleCount -= 1;
+    handlePanelNoLongerVisible();
+    return;
   }
+
+  state.fileExplorerVisible = state.fileExplorerVisible === true ? false : true;
   if (state.fileExplorerVisible === true) {
     closePanel(false, false);
     closeActiveDiffView();
@@ -1168,7 +1135,6 @@ function handleIdle(): void {
     return;
   }
 
-  debugSplitState("idle-check");
   if (hasLikelyFileExplorerSplit()) {
     state.fileExplorerVisible = true;
     closePanel(false, false);
@@ -1196,16 +1162,13 @@ function handleLayoutChanged(): void {
 }
 
 registerHandler("git_changed_files_show", () => {
-  void showGitChangedFilesPanel();
+  void toggleGitChangedFilesPanel();
 });
 registerHandler("git_changed_files_refresh", () => {
   void refreshGitChangedFiles();
 });
 registerHandler("git_changed_files_open_selected", () => {
   void openSelectedChangedFile();
-});
-registerHandler("git_changed_files_mouse_click", (args: MouseClickHookArgs) => {
-  void openClickedChangedFile(args);
 });
 registerHandler("git_changed_files_prompt_open", () => {
   void promptOpenChangedFile();
@@ -1215,7 +1178,6 @@ registerHandler("git_changed_files_panel_closed", handlePanelClosed);
 registerHandler("git_changed_files_close_diff", closeActiveDiffView);
 registerHandler("git_changed_files_pre_command", handlePreCommand);
 registerHandler("git_changed_files_post_command", handlePostCommand);
-registerHandler("git_changed_files_debug_buffers", debugListBuffers);
 registerHandler("git_changed_files_idle", handleIdle);
 registerHandler("git_changed_files_layout_changed", handleLayoutChanged);
 
@@ -1255,12 +1217,6 @@ editor.registerCommand(
   "Git Changed Files: Refresh",
   "Refresh Git changed file explorer decorations",
   "git_changed_files_refresh",
-);
-
-editor.registerCommand(
-  "Git Changed Files: Debug Buffers",
-  "Log all open buffer metadata for debugging",
-  "git_changed_files_debug_buffers",
 );
 
 editor.on("after_file_open", () => {
@@ -1310,4 +1266,3 @@ editor.on("resize", "git_changed_files_layout_changed");
 
 installDefaultShowKeybinding();
 void refreshGitChangedFiles();
-editor.debug("Git Changed Files Explorer plugin loaded");
